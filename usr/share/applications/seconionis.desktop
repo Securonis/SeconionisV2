@@ -7,6 +7,4 @@ Terminal=false
 Type=Application
 Icon=/usr/share/icons/securonis/seconionis.png
 Categories=Securonis;Securonis;
-StartupNotify=false
-
-
+StartupNotify=false 
