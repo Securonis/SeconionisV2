@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Name=Seconionis Tor Router
+Comment=Route all system traffic through the Tor network.
+Exec=seconionis-check
+Terminal=false
+Type=Application
+Icon=/usr/share/icons/securonis/seconionis.png
+Categories=Securonis;Securonis;
+StartupNotify=false
+
+
