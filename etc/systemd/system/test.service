@@ -1,6 +1,5 @@
 [Unit]
 Description=Seconionis Tor Traffic Routing
-Documentation=man:seconionis(8)
 After=network-online.target tor.service
 Wants=network-online.target tor.service
 
