@@ -1,8 +1,8 @@
 [Unit]
 Description=Seconionis Tor Traffic Routing
 Before=poweroff.target reboot.target tor.service
-After=network.target
-Wants=tor.service
+After=network-online.target tor.service
+Wants=network-online.target tor.service
 
 [Service]
 ExecStart=/usr/bin/seconionis start
