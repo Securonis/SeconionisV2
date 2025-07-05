@@ -21,7 +21,7 @@ from gi.repository import AyatanaAppIndicator3 as appindicator
 from gi.repository import Notify, GdkPixbuf
 
 def main():
-  Notify.init("Seconionis")
+  Notify.init("Seconionis")k
   indicator = appindicator.Indicator.new("customtray", '', appindicator.IndicatorCategory.APPLICATION_STATUS)
   indicator.set_status(appindicator.IndicatorStatus.ACTIVE)
   indicator.set_menu(menu(indicator))
@@ -188,7 +188,7 @@ def tor_router_torchk(menuitem):
   web_browser_thread.start()
 
 def tor_router_reload(menuitem):
-  process = subprocess.Popen(['sudo', '/usr/bin/seconionis', 'changeip'], stdout=subprocess.PIPE)
+  process = subprocess.Popen(['sudo', '/usr/bin/seconionis', 'changeid'], stdout=subprocess.PIPE)
   stdout = process.communicate()[0]
 
   print(stdout.decode('utf-8'))
