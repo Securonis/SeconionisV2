@@ -1,563 +1,302 @@
-#!/bin/bash
-
-# Seconionis Tor Traffic Router
-# Developer : root0emir 
-
-# Seconionis version
-VERSION="Seconionis 2.0"
-
-TOR_EXCLUDE="127.0.0.0/8 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16 \
-172.16.0.0/12 192.0.0.0/24 192.0.2.0/24 192.168.0.0/16 \
-198.18.0.0/15 198.51.100.0/24 203.0.113.0/24 \
-224.0.0.0/4 240.0.0.0/4"
-
-TOR_UID="debian-tor"
-
-TOR_PORT="9040"
-
-TOR_DNS="9053"
-
-TORRC="/etc/tor/torrc"
-
-GREEN=""
-RED=""
-REDB=""
-YELLOW=""
-BLUE=""
-RESET=""
-
-if [ -t 1 ]; then
-    if tput setaf 0 &>/dev/null; then
-        RESET="$(tput sgr0)"
-        BOLD="$(tput bold)"
-        GREEN="$(tput setaf 2)"
-        RED="$(tput setaf 1)"
-        REDB="${BOLD}${RED}"
-        YELLOW="$(tput setaf 3)"
-        BLUE="$(tput setaf 4)"
-    else
-        RESET="\e[0m"
-        BOLD="\e[1m"
-        GREEN="\e[32m"
-        RED="\e[31m"
-        REDB="${BOLD}${RED}"
-        YELLOW="\e[33m"
-        BLUE="\e[34m"
-    fi
-fi
-
-BACKUPDIR="/var/lib/seconionis"
-
-err() {
-    echo "${RED}[-]${RESET} ERROR: ${@}"
-    exit 1
-}
-
-warn() {
-    echo "${YELLOW}[!]${RESET} WARNING: ${@}"
-}
-
-msg() {
-    echo "${GREEN}[+]${RESET} ${@}"
-}
-
-info() {
-    echo "${BLUE}[*]${RESET} ${@}"
-}
-
-banner() {
-    echo -e "${REDB}[ Seconionis - Tor Traffic Router ]${RESET}\n"
-}
-
-version() {
-    echo "${VERSION}"
-}
-
-about() {
-    echo -e "${REDB}[Seconionis - Tor Traffic Router]${RESET}\n"
-    echo -e "Seconionis is a tool that forces all system traffic through the Tor network by using a Tor transparent proxy."
-    echo -e "Author: root0emir"
-    echo -e "Github: https://github.com/Securonis/SeconionisV2\n"
-}
-
-check_root() {
-    if [ $(id -u) -ne 0 ]; then
-        err "!-This script must be run as root"
-    fi
-}
-
-check_backup_dir() {
-    if [ ! -d $BACKUPDIR ]; then
-        mkdir -p $BACKUPDIR
-    fi
-}
-
-start_service() {
-    SERVICE=${@}
-    if [[ $(systemctl is-active $SERVICE) != "active" ]]; then
-        warn "$SERVICE is not started"
-        info "starting $SERVICE service"
-        systemctl start $SERVICE || err "unable to start $SERVICE service"
-        msg "started $SERVICE service"
-    else
-        warn "$SERVICE is running"
-        info "reloading $SERVICE service"
-        systemctl reload $SERVICE || err "unable to reload $SERVICE service"
-        msg "reloaded $SERVICE service"
-    fi
-
-}
-
-stop_service() {
-    SERVICE=${@}
-    if [[ $(systemctl is-active $SERVICE) == "active" ]]; then
-        warn "$SERVICE is active"
-        info "Stopping $SERVICE service"
-        systemctl stop $SERVICE || err "Unable to stop $SERVICE service"
-        msg "Stopped $SERVICE service"
-    fi
-}
-
-is_started() {
-    if [ -e $BACKUPDIR/started ]; then
-        return 0
-    fi
-    return 1
-}
-
-flush_iptables() {
-    iptables -F
-    iptables -t nat -F
-}
-
-wipe() {
-    echo 1024 >/proc/sys/vm/min_free_kbytes
-    echo 3 >/proc/sys/vm/drop_caches
-    echo 1 >/proc/sys/vm/oom_kill_allocating_task
-    echo 1 >/proc/sys/vm/overcommit_memory
-    echo 0 >/proc/sys/vm/oom_dump_tasks
-    smem-secure-delete -fllv
-}
-
-get_ip() {
-    HTML=$(curl -s https://check.torproject.org/?lang=en_US)
-    IP=$(echo "$HTML" | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -n 1)
-    echo "Public IP         : $IP"
-}
-
-
-backup_torrc() {
-    warn "Backing up tor config..."
-    mv "$TORRC" $BACKUPDIR/torrc.bak
-    msg "Backed up tor config"
-}
-
-backup_resolv_conf() {
-    info "Backing up nameservers..."
-    mv /etc/resolv.conf $BACKUPDIR/resolv.conf.bak
-    msg "Backed up nameservers"
-}
-
-backup_iptables() {
-    info "Backing up iptables rules..."
-    iptables-save >$BACKUPDIR/iptables.rules.bak
-    msg "Backed up iptables rules"
-}
-
-backup_sysctl() {
-    info "Backing up sysctl rules..."
-    sysctl -a >$BACKUPDIR/sysctl.conf.bak
-    msg "Backed up sysctl rules"
-}
-
-restore_torrc() {
-    if [ -e $BACKUPDIR/torrc.bak ]; then
-        warn "Restoring tor config..."
-        rm -f /etc/tor/torrc
-        mv $BACKUPDIR/torrc.bak /etc/tor/torrc
-        msg "Restored tor config"
-    fi
-}
-
-restore_resolv_conf() {
-    if [ -e $BACKUPDIR/resolv.conf.bak ]; then
-        warn "Restoring nameservers..."
-        rm -f $BACKUPDIR/resolv.conf
-        mv $BACKUPDIR/resolv.conf.bak /etc/resolv.conf
-        msg "Restored nameservers"
-    fi
-}
-
-restore_iptables() {
-    if [ -e $BACKUPDIR/iptables.rules.bak ]; then
-        warn "Restoring iptables rules"
-        iptables-restore <$BACKUPDIR/iptables.rules.bak
-        rm -f $BACKUPDIR/iptables.rules.bak
-        msg "Restored iptables rules"
-    fi
-}
-
-restore_sysctl() {
-    if [ -e $BACKUPDIR/sysctl.conf.bak ]; then
-        warn "Restoring sysctl rules"
-        sysctl -p $BACKUPDIR/sysctl.conf.bak &>"/dev/null"
-        rm -f $BACKUPDIR/sysctl.conf.bak
-        msg "Restored sysctl rules"
-    fi
-}
-
-gen_resolv_conf() {
-    warn "Configuring nameservers..."
-    cat >"/etc/resolv.conf" <<EOF
-# generated by seconionis
-nameserver 127.0.0.1
-EOF
-    chmod 644 /etc/resolv.conf
-    msg "Configured nameservers"
-}
-
-gen_torrc() {
-    warn "Configuring tor"
-    cat >"${TORRC}" <<EOF
-# generated by seconionis
-User $TOR_UID
-DataDirectory /var/lib/tor
-VirtualAddrNetwork 10.192.0.0/10
-AutomapHostsOnResolve 1
-AutomapHostsSuffixes .exit,.onion
-TransPort 127.0.0.1:$TOR_PORT IsolateClientAddr IsolateSOCKSAuth IsolateClientProtocol IsolateDestPort IsolateDestAddr
-SocksPort 127.0.0.1:9050 IsolateClientAddr IsolateSOCKSAuth IsolateClientProtocol IsolateDestPort IsolateDestAddr
-ControlPort 9051
-DNSPort 127.0.0.1:$TOR_DNS
-# Sandbox 1 - tor package is not built with --enable-seccomp required to use this option.
-HardwareAccel 1
-TestSocks 1
-AllowNonRFC953Hostnames 0
-WarnPlaintextPorts 23,109,110,143,80
-ClientRejectInternalAddresses 1
-NewCircuitPeriod 40
-MaxCircuitDirtiness 600
-MaxClientCircuitsPending 48
-UseEntryGuards 1
-AvoidDiskWrites 1
-EnforceDistinctSubnets 1
-EOF
-    chmod 644 ${TORRC}
-    msg "Configured tor"
-}
-
-apply_iptables_rules() {
-    info "Applying iptables rules..."
-
-    # NAT table
-    iptables -t nat -F
-
-    iptables -t nat -A OUTPUT -m owner --uid-owner $TOR_UID -j RETURN
-
-    iptables -t nat -A OUTPUT -d 127.0.0.1/32 -p udp --dport 53 -j REDIRECT --to-ports "$TOR_DNS"
-
-    iptables -t nat -A OUTPUT -p tcp -d 10.192.0.0/10 -j REDIRECT --to-ports "$TOR_PORT"
-    iptables -t nat -A OUTPUT -p udp -d 10.192.0.0/10 -j REDIRECT --to-ports "$TOR_PORT"
-
-    for NET in $TOR_EXCLUDE; do
-        iptables -t nat -A OUTPUT -d "$NET" -j RETURN
-        iptables -A OUTPUT -d "$NET" -j ACCEPT
-    done
-
-    iptables -t nat -A OUTPUT -p tcp --tcp-flags SYN,RST,ACK SYN -j REDIRECT --to-ports "$TOR_PORT"
-    iptables -t nat -A OUTPUT -p udp -j REDIRECT --to-ports "$TOR_PORT"
-
-    # NO ICMP REDIRECT to TOR
-    # iptables -t nat -A OUTPUT -p icmp -j REDIRECT --to-ports "$TOR_PORT" # remove this
-
-    # FILTER table
-    iptables -F
-    iptables -X
-
-    # INPUT
-    iptables -A INPUT -m state --state ESTABLISHED -j ACCEPT
-    iptables -A INPUT -i lo -j ACCEPT
-    iptables -A INPUT -j DROP
-
-    # FORWARD
-    iptables -A FORWARD -j DROP
-
-    # OUTPUT
-    iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-    iptables -A OUTPUT -m state --state INVALID -j DROP
-
-    iptables -A OUTPUT -m owner --uid-owner $TOR_UID -j ACCEPT
-    iptables -A OUTPUT -m owner --uid-owner $TOR_UID -p tcp --tcp-flags FIN,SYN,RST,ACK SYN -m state --state NEW -j ACCEPT
-    iptables -A OUTPUT -d 127.0.0.1/32 -o lo -j ACCEPT
-    iptables -A OUTPUT -d 127.0.0.1/32 -p tcp --dport "$TOR_PORT" --tcp-flags FIN,SYN,RST,ACK SYN -j ACCEPT
-
-    # ICMP (optional)
-    iptables -A OUTPUT -p icmp -j ACCEPT
-
-    iptables -A OUTPUT -j REJECT
-
-    msg "Applied iptables rules"
-}
-
-apply_sysctl_rules() {
-    info "Applying sysctl rules..."
-
-    # Disable IPv6 for data leaks
-    /sbin/sysctl -w net.ipv6.conf.all.disable_ipv6=1 &>"/dev/null"
-    /sbin/sysctl -w net.ipv6.conf.default.disable_ipv6=1 &>"/dev/null"
-    /sbin/sysctl -w net.ipv6.conf.lo.disable_ipv6=1 &>"/dev/null"
-    msg "Applied sysctl rules"
-}
-
-start() {
-    if is_started; then
-        err "Seconionis is already started"
-    fi
-
-    backup_torrc
-
-    backup_resolv_conf
-
-    backup_iptables
-
-    backup_sysctl
-
-    flush_iptables
-
-    gen_torrc
-
-    gen_resolv_conf
-
-    start_service tor
-
-    apply_iptables_rules
-
-    apply_sysctl_rules
-
-    msg "All traffic is successfully routed through the Tor network"
-
-    touch $BACKUPDIR/started
-}
-
-stop() {
-    if ! is_started; then
-        err "Seconionis is already stopped"
-    fi
-
-    restore_sysctl
-
-    flush_iptables
-
-    restore_iptables
-
-    stop_service tor
-
-    restore_torrc
-
-    restore_resolv_conf
-
-    rm -f $BACKUPDIR/started
-}
-
-changeid() {
-    if ! is_started; then
-        err "You are not using Tor network. Please start Seconionis first."
-    fi
-
-    info "Changing tor identity..."
-    stop_service tor &>"/dev/null"
-    sleep 1
-    start_service tor &>"/dev/null"
-    msg "Tor identity changed"
-}
-
-changemac() {
-    warn "Changing mac addresses..."
-    IFACES=$(ip -o link show | awk -F': ' '{print $2}')
-    for IFACE in $IFACES; do
-        if [ $IFACE != "lo" ]; then
-            ip link set $IFACE down &>"/dev/null"
-            macchanger -r $IFACE &>"/dev/null"
-            ip link set $IFACE up &>"/dev/null"
-        fi
-    done
-    msg "Changed mac addresses"
-}
-
-revertmac() {
-    warn "Reverting mac addresses..."
-    IFACES=$(ip -o link show | awk -F': ' '{print $2}')
-    for IFACE in $IFACES; do
-        if [ $IFACE != "lo" ]; then
-            ip link set $IFACE down &>"/dev/null"
-            macchanger -p $IFACE &>"/dev/null"
-            ip link set $IFACE up &>"/dev/null"
-        fi
-    done
-    msg "Reverted mac addresses"
-}
-
-status() {
-    TORSTATUS=$(systemctl is-active tor)
-
-    AUTOWIPESTATUS=$(systemctl is-enabled seconionis-autowipe)
-
-    AUTOSTARTSTATUS=$(systemctl is-enabled seconionis-autostart)
-
-    if is_started; then
-        msg "Seconionis started"
-    else
-        warn "Seconionis stopped"
-    fi
-
-    if [[ "${TORSTATUS}" == "active" ]]; then
-        msg "Tor service is: ${TORSTATUS}"
-    else
-        warn "Tor service is: ${TORSTATUS}"
-    fi
-
-    if [[ "${AUTOWIPESTATUS}" == "enabled" ]]; then
-        msg "seconionis-autowipe service is: ${AUTOWIPESTATUS}"
-    else
-        warn "seconionis-autowipe service is: ${AUTOWIPESTATUS}"
-    fi
-
-    if [[ "${AUTOSTARTSTATUS}" == "enabled" ]]; then
-        msg "seconionis-autostart service is: ${AUTOSTARTSTATUS}"
-    else
-        warn "seconionis-autostart service is: ${AUTOSTARTSTATUS}"
-    fi
-}
-
-autowipe() {
-    warn "Enabling seconionis-autowipe..."
-    systemctl enable seconionis-autowipe &>"/dev/null"
-    msg "Enabled Seconionis-autowipe"
-}
-
-disable_autowipe() {
-    warn "Disabling seconionis-autowipe..."
-    systemctl disable seconionis-autowipe &>"/dev/null"
-    msg "Disabled Seconionis-autowipe"
-}
-
-autostart() {
-    warn "Enabling seconionis-autostart..."
-    systemctl enable seconionis-autostart &>"/dev/null"
-    msg "Enabled seconionis-autostart"
-}
-
-disable_autostart() {
-    warn "Disabling seconionis-autostart..."
-    systemctl disable seconionis-autostart &>"/dev/null"
-    msg "Disabled seconionis-autostart"
-}
-
-usage() {
-    echo -e "Seconionis developed by root0emir \n"
-    echo -e "A script to redirect all traffic through tor network\n"
-    echo -e "Commands:"
-    echo -e "  start      - Start tor and redirect all traffic through tor"
-    echo -e "  stop       - Stop tor and redirect all traffic through tor"
-    echo -e "  status     - Get info about Tor service status"
-    echo -e "  restart    - Restart tor and traffic rules"
-    echo -e "  autowipe   - Enable memory wipe at shutdown"
-    echo -e "  disable-autowipe - Disable memory wipe at shutdown"
-    echo -e "  autostart  - Start Seconionis at startup"
-    echo -e "  disable-autostart - Disable Seconionis at startup"
-    echo -e "  ip         - Get remote ip address"
-    echo -e "  changeid     - Change tor identity"
-    echo -e "  changemac    - Change mac addresses of all interfaces"
-    echo -e "  revertmac      - Revert mac addresses of all interfaces"
-    echo -e "  version    - Print version of seconionis and exit"
-    echo -e "  about      - Show information about Seconionis\n"
-}
-
-main() {
-    banner
-
-    case "$1" in
-    start)
-        check_root
-        check_backup_dir
-        start
-        autostart
-        ;;
-    stop)
-        check_root
-        check_backup_dir
-        stop
-        disable_autostart
-        ;;
-    status)
-        check_root
-        check_backup_dir
-        status
-        ;;
-    restart)
-        check_root
-        check_backup_dir
-        stop
-        sleep 1
-        start
-        ;;
-    autowipe)
-        check_root
-        check_backup_dir
-        autowipe
-        ;;
-    disable-autowipe)
-        check_root
-        check_backup_dir
-        disable_autowipe
-        ;;
-    autostart)
-        check_root
-        check_backup_dir
-        autostart
-        ;;
-    disable-autostart)
-        check_root
-        check_backup_dir
-        disable_autostart
-        ;;
-    ip)
-        get_ip
-        ;;
-    changeid)
-        check_root
-        check_backup_dir
-        changeid
-        ;;
-    changemac)
-        check_root
-        check_backup_dir
-        changemac
-        ;;
-    revertmac)
-        check_root
-        check_backup_dir
-        revertmac
-        ;;
-    version)
-        version
-        ;;
-    about)
-        about
-        ;;
-    wipe)
-        check_root
-        check_backup_dir
-        wipe
-        ;;
-    *)
-        usage
-        exit 1
-        ;;
-    esac
-    exit 0
-}
-
-main "${@}"
-
-# EOF
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+import os
+#import sys
+import subprocess
+import gi
+import gettext
+import threading
+import webbrowser
+
+# Initialize gettext for translations
+gettext.bindtextdomain('seconionis', '/usr/share/locale')
+gettext.textdomain('seconionis')
+_ = gettext.gettext
+
+gi.require_version("Gtk", "3.0")
+gi.require_version('AyatanaAppIndicator3', '0.1')
+gi.require_version('Notify', '0.7')
+from gi.repository import GLib as glib, Gtk as gtk, Gdk as gdk
+from gi.repository import AyatanaAppIndicator3 as appindicator
+from gi.repository import Notify, GdkPixbuf
+
+def main():
+  Notify.init("Seconionis")
+  indicator = appindicator.Indicator.new("customtray", '', appindicator.IndicatorCategory.APPLICATION_STATUS)
+  indicator.set_status(appindicator.IndicatorStatus.ACTIVE)
+  indicator.set_menu(menu(indicator))
+  status_update(indicator)
+  glib.timeout_add(1000, status_update, indicator)
+  gtk.main()
+
+def status_update(indicator):
+
+  status = subprocess.check_output("sudo  /usr/share/seconionis/seconionis-status", shell=True)
+
+  if status == b'offline':
+    indicator.set_icon(indicator.ICON_OFFLINE)
+    indicator.set_label(indicator.LABEL_OFFLINE, 'customtray')
+    indicator.menuitem_start.set_sensitive(False)
+    indicator.menuitem_stop.set_sensitive(False)
+    indicator.menuitem_reload.set_sensitive(False)
+  elif status == b'disabled':
+    indicator.set_icon(indicator.ICON_DISABLED)
+    indicator.set_label(indicator.LABEL_DISABLED, 'customtray')
+    indicator.menuitem_start.set_sensitive(True)
+    indicator.menuitem_stop.set_sensitive(False)
+    indicator.menuitem_reload.set_sensitive(False)
+  elif status == b'stopped':
+    indicator.set_icon(indicator.ICON_STOPPED)
+    indicator.set_label(indicator.LABEL_STOPPED, 'customtray')
+    indicator.menuitem_start.set_sensitive(True)
+    indicator.menuitem_stop.set_sensitive(False)
+    indicator.menuitem_reload.set_sensitive(False)
+  else:  # enabled
+    indicator.set_icon(indicator.ICON_ENABLED)
+    indicator.set_label(indicator.LABEL_ENABLED, 'customtray')
+    indicator.menuitem_start.set_sensitive(False)
+    indicator.menuitem_stop.set_sensitive(True)
+    indicator.menuitem_reload.set_sensitive(True)
+
+  return True
+
+def menu(indicator):
+
+  indicator.APP_ICON       = os.environ['APP_ICON']       if 'APP_ICON'       in os.environ else '/usr/share/icons/hicolor/scalable/apps/seconionis.png'
+
+  indicator.ICON_OFFLINE   = os.environ['ICON_OFFLINE']   if 'ICON_OFFLINE'   in os.environ else '/usr/share/icons/hicolor/scalable/apps/seconionis-offline.png'
+  indicator.ICON_DISABLED  = os.environ['ICON_DISABLED']  if 'ICON_DISABLED'  in os.environ else '/usr/share/icons/hicolor/scalable/apps/seconionis-disabled.png'
+  indicator.ICON_STOPPED   = os.environ['ICON_STOPPED']   if 'ICON_STOPPED'   in os.environ else '/usr/share/icons/hicolor/scalable/apps/seconionis-stopped.png'
+  indicator.ICON_ENABLED   = os.environ['ICON_ENABLED']   if 'ICON_ENABLED'   in os.environ else '/usr/share/icons/hicolor/scalable/apps/seconionis-enabled.png'
+
+  indicator.LABEL_OFFLINE  = os.environ['LABEL_OFFLINE']  if 'LABEL_OFFLINE'  in os.environ else _('OFFLINE')
+  indicator.LABEL_DISABLED = os.environ['LABEL_DISABLED'] if 'LABEL_DISABLED' in os.environ else _('TOR ROUTING')
+  indicator.LABEL_STOPPED  = os.environ['LABEL_STOPPED']  if 'LABEL_STOPPED'  in os.environ else _('STOPPED')
+  indicator.LABEL_ENABLED  = os.environ['LABEL_ENABLED']  if 'LABEL_ENABLED'  in os.environ else _('TOR ROUTING')
+
+  indicator.MENU_START     = os.environ['MENU_START']     if 'MENU_START'     in os.environ else _('Start Tor Routing')
+  indicator.MENU_STOP      = os.environ['MENU_STOP']      if 'MENU_STOP'      in os.environ else _('Stop Tor Routing')
+  indicator.MENU_TORCHK    = os.environ['MENU_TORCHK']    if 'MENU_TORCHK'    in os.environ else _('Show IP Address')
+  indicator.MENU_RELOAD    = os.environ['MENU_RELOAD']    if 'MENU_RELOAD'    in os.environ else _('Switch IP Address')
+  indicator.MENU_STATUS    = os.environ['MENU_STATUS']    if 'MENU_STATUS'    in os.environ else _('Status')
+  indicator.MENU_CHANGEMAC = os.environ['MENU_CHANGEMAC'] if 'MENU_CHANGEMAC' in os.environ else _('Change MAC Address')
+  indicator.MENU_REVERTMAC = os.environ['MENU_REVERTMAC'] if 'MENU_REVERTMAC' in os.environ else _('Revert MAC Address')
+  indicator.MENU_ABOUT     = os.environ['MENU_ABOUT']     if 'MENU_ABOUT'     in os.environ else _('About')
+  indicator.MENU_EXIT      = os.environ['MENU_EXIT']      if 'MENU_EXIT'      in os.environ else _('Exit')
+
+  menu = gtk.Menu()
+
+  menuitem_start = gtk.MenuItem(indicator.MENU_START)
+  menuitem_start.connect('activate', tor_router_start)
+  menu.append(menuitem_start)
+
+  menuitem_stop = gtk.MenuItem(indicator.MENU_STOP)
+  menuitem_stop.connect('activate', tor_router_stop)
+  menu.append(menuitem_stop)
+
+  menuitem_separator1 = gtk.SeparatorMenuItem()
+  menu.append(menuitem_separator1)
+
+  menuitem_torchk = gtk.MenuItem(indicator.MENU_TORCHK)
+  menuitem_torchk.connect('activate', tor_router_torchk)
+  menu.append(menuitem_torchk)
+
+  menuitem_reload = gtk.MenuItem(indicator.MENU_RELOAD)
+  menuitem_reload.connect('activate', tor_router_reload)
+  menu.append(menuitem_reload)
+
+  menuitem_status = gtk.MenuItem(indicator.MENU_STATUS)
+  menuitem_status.connect('activate', tor_router_status)
+  menu.append(menuitem_status)
+
+  menuitem_changemac = gtk.MenuItem(indicator.MENU_CHANGEMAC)
+  menuitem_changemac.connect('activate', tor_router_changemac)
+  menu.append(menuitem_changemac)
+
+  menuitem_revertmac = gtk.MenuItem(indicator.MENU_REVERTMAC)
+  menuitem_revertmac.connect('activate', tor_router_revertmac)
+  menu.append(menuitem_revertmac)
+
+  menuitem_separator2 = gtk.SeparatorMenuItem()
+  menu.append(menuitem_separator2)
+
+  menuitem_about = gtk.MenuItem(indicator.MENU_ABOUT)
+  menuitem_about.connect('activate', dialog_about)
+  menu.append(menuitem_about)
+
+  menuitem_exit = gtk.MenuItem(indicator.MENU_EXIT)
+  menuitem_exit.connect('activate', quit)
+  menu.append(menuitem_exit)
+
+  indicator.menuitem_start  = menuitem_start
+  indicator.menuitem_stop   = menuitem_stop
+  indicator.menuitem_reload = menuitem_reload
+
+  menu.indicator = indicator
+  menu.show_all()
+  return menu
+
+def tor_router_start(menuitem):
+  process = subprocess.Popen(['sudo', '/usr/bin/seconionis', 'start'], stdout=subprocess.PIPE)
+  stdout = process.communicate()[0]
+
+  print(stdout.decode('utf-8'))
+
+  if process.returncode == 0:
+    notification = Notify.Notification.new(_('Seconionis started'), stdout.decode('utf-8'))
+  else:
+    notification = Notify.Notification.new(_('Seconionis failed to start'), stdout.decode('utf-8'))
+
+  image = GdkPixbuf.Pixbuf.new_from_file(menuitem.get_parent().indicator.ICON_ENABLED)
+
+  notification.set_hint('resident', glib.Variant.new_boolean(False))
+  notification.set_hint('transient', glib.Variant.new_boolean(True))
+  notification.set_icon_from_pixbuf(image)
+  notification.set_image_from_pixbuf(image)
+  notification.set_timeout(5000)
+  notification.show()
+
+def tor_router_stop(menuitem):
+  process = subprocess.Popen(['sudo', '/usr/bin/seconionis', 'stop'], stdout=subprocess.PIPE)
+  stdout = process.communicate()[0]
+
+  print(stdout.decode('utf-8'))
+
+  if process.returncode == 0:
+    notification = Notify.Notification.new(_('Seconionis stopped'), stdout.decode('utf-8'))
+  else:
+    notification = Notify.Notification.new(_('Seconionis failed to stop'), stdout.decode('utf-8'))
+
+  image = GdkPixbuf.Pixbuf.new_from_file(menuitem.get_parent().indicator.ICON_DISABLED)
+
+  notification.set_hint('resident', glib.Variant.new_boolean(False))
+  notification.set_hint('transient', glib.Variant.new_boolean(True))
+  notification.set_icon_from_pixbuf(image)
+  notification.set_image_from_pixbuf(image)
+  notification.set_timeout(5000)
+  notification.show()
+
+#def tor_router_torchk(menuitem):
+#  pid = os.fork()
+#  if not pid:
+#    webbrowser.get('/usr/bin/x-www-browser --incognito -private-window %s').open('https://check.torproject.org/', new=2)
+#    sys.exit()
+
+def tor_router_torchk(menuitem):
+  open_web_browser=lambda: webbrowser.get('/usr/bin/x-www-browser --incognito -private-window %s').open('https://check.torproject.org/', new=2)
+  web_browser_thread=threading.Thread(target=open_web_browser)
+  web_browser_thread.start()
+
+def tor_router_reload(menuitem):
+  process = subprocess.Popen(['sudo', '/usr/bin/seconionis', 'restart'], stdout=subprocess.PIPE)
+  stdout = process.communicate()[0]
+
+  print(stdout.decode('utf-8'))
+
+  if process.returncode == 0:
+    notification = Notify.Notification.new(_('Seconionis reloaded'), stdout.decode('utf-8'))
+  else:
+    notification = Notify.Notification.new(_('Seconionis failed to reload'), stdout.decode('utf-8'))
+
+  image = GdkPixbuf.Pixbuf.new_from_file(menuitem.get_parent().indicator.ICON_ENABLED)
+
+  notification.set_hint('resident', glib.Variant.new_boolean(False))
+  notification.set_hint('transient', glib.Variant.new_boolean(True))
+  notification.set_icon_from_pixbuf(image)
+  notification.set_image_from_pixbuf(image)
+  notification.set_timeout(5000)
+  notification.show()
+
+def tor_router_status(menuitem):
+  process = subprocess.Popen(['sudo', '/usr/bin/seconionis', 'status'], stdout=subprocess.PIPE)
+  stdout = process.communicate()[0]
+
+  if process.returncode == 0:
+    notification = Notify.Notification.new(_('Seconionis is running'), _('All system traffic is being routed through the Tor network.'))
+  else:
+    notification = Notify.Notification.new(_('Seconionis is not running'), _('Traffic is NOT routed through Tor.'))
+
+  image = GdkPixbuf.Pixbuf.new_from_file(menuitem.get_parent().indicator.ICON_ENABLED)
+
+  notification.set_hint('resident', glib.Variant.new_boolean(False))
+  notification.set_hint('transient', glib.Variant.new_boolean(True))
+  notification.set_icon_from_pixbuf(image)
+  notification.set_image_from_pixbuf(image)
+  notification.set_timeout(5000)
+  notification.show()
+
+def tor_router_changemac(menuitem):
+  process = subprocess.Popen(['sudo', '/usr/bin/seconionis', 'changemac'], stdout=subprocess.PIPE)
+  stdout = process.communicate()[0]
+
+  print(stdout.decode('utf-8'))
+
+  if process.returncode == 0:
+    notification = Notify.Notification.new(_('MAC addresses changed'), stdout.decode('utf-8'))
+  else:
+    notification = Notify.Notification.new(_('Failed to change MAC addresses'), stdout.decode('utf-8'))
+
+  image = GdkPixbuf.Pixbuf.new_from_file(menuitem.get_parent().indicator.APP_ICON)
+
+  notification.set_hint('resident', glib.Variant.new_boolean(False))
+  notification.set_hint('transient', glib.Variant.new_boolean(True))
+  notification.set_icon_from_pixbuf(image)
+  notification.set_image_from_pixbuf(image)
+  notification.set_timeout(5000)
+  notification.show()
+
+def tor_router_revertmac(menuitem):
+  process = subprocess.Popen(['sudo', '/usr/bin/seconionis', 'revertmac'], stdout=subprocess.PIPE)
+  stdout = process.communicate()[0]
+
+  print(stdout.decode('utf-8'))
+
+  if process.returncode == 0:
+    notification = Notify.Notification.new(_('MAC addresses reverted'), stdout.decode('utf-8'))
+  else:
+    notification = Notify.Notification.new(_('Failed to revert MAC addresses'), stdout.decode('utf-8'))
+
+  image = GdkPixbuf.Pixbuf.new_from_file(menuitem.get_parent().indicator.APP_ICON)
+
+  notification.set_hint('resident', glib.Variant.new_boolean(False))
+  notification.set_hint('transient', glib.Variant.new_boolean(True))
+  notification.set_icon_from_pixbuf(image)
+  notification.set_image_from_pixbuf(image)
+  notification.set_timeout(5000)
+  notification.show()
+
+def dialog_about(menuitem):
+
+  menuitem.set_sensitive(False)
+
+  about_dialog = gtk.AboutDialog()
+
+  about_dialog.set_attached_to(menuitem)
+  about_dialog.set_transient_for(None)
+  about_dialog.set_auto_startup_notification(False)
+  about_dialog.set_keep_above(True)
+  about_dialog.set_modal(True)
+  about_dialog.set_skip_pager_hint(True)
+  about_dialog.set_skip_taskbar_hint(True)
+  about_dialog.connect("destroy", lambda w: (menuitem.set_sensitive(True), w.destroy()))
+
+  about_dialog.set_logo(GdkPixbuf.Pixbuf.new_from_file(menuitem.get_parent().indicator.APP_ICON).scale_simple(48, 48, GdkPixbuf.InterpType.BILINEAR))
+
+  about_dialog.set_program_name(_('Seconionis'))
+  about_dialog.set_version("1.0")
+  about_dialog.set_authors(["root0emir"])
+  about_dialog.set_license("GNU General Public License v3.0\n\nThis program is free software...")
+  about_dialog.set_website("https://securonis.github.io")
+  about_dialog.set_comments(_('This indicator allows you to manage TOR routing system-wide.'))
+
+# about_dialog.run()
+# about_dialog.destroy()
+
+  about_dialog.show_all()
+
+def quit(menuitem):
+  Notify.uninit()
+  gtk.main_quit()
+
+if __name__ == "__main__":
+  main()
