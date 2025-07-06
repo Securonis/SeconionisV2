@@ -7,8 +7,6 @@ import gi
 import gettext
 import threading
 import webbrowser
-import requests
-import json
 
 # Configuration
 TOR_PORT = "9040"
@@ -231,18 +229,13 @@ def tor_router_status(menuitem):
         except subprocess.CalledProcessError:
             autostart_status = 'inactive'
         
-        # Check if traffic is actually being routed through Tor by checking torproject.org
+        # Check if traffic is actually being routed through Tor by using curl through torsocks
         try:
-            # Use a timeout to avoid hanging if network is down
-            session = requests.Session()
-            session.proxies = {
-                'http': 'socks5h://127.0.0.1:' + TOR_PORT,
-                'https': 'socks5h://127.0.0.1:' + TOR_PORT
-            }
-            # Use check.torproject.org API endpoint
-            response = session.get('https://check.torproject.org/api/ip', timeout=5)
-            data = response.json()
-            routing_active = data.get('IsTor', False)
+            # Use curl with torsocks to check if we're using Tor
+            cmd = f"torsocks -P {TOR_PORT} curl -s https://check.torproject.org"
+            result = subprocess.check_output(cmd, shell=True, timeout=5).decode('utf-8')
+            # If the page contains "Congratulations" it means we're using Tor
+            routing_active = "Congratulations" in result
         except Exception as e:
             print(f"Error checking Tor status: {e}")
             routing_active = False
