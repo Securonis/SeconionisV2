@@ -232,7 +232,7 @@ def tor_router_status(menuitem):
         # Check if traffic is actually being routed through Tor by using curl through torsocks
         try:
             # Use curl with torsocks to check if we're using Tor
-            cmd = f"torsocks -P {TOR_PORT} curl -s https://check.torproject.org"
+            cmd = f"curl -s https://check.torproject.org"
             result = subprocess.check_output(cmd, shell=True, timeout=5).decode('utf-8')
             # If the page contains "Congratulations" it means we're using Tor
             routing_active = "Congratulations" in result
