@@ -1,32 +1,17 @@
 #!/bin/bash
 
-# Seconionis status checker
-
-BACKUPDIR="/var/lib/seconionis"
-
-# Check internet connectivity by pinging a reliable host
-check_internet() {
-    ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1 || ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1
-    return $?
-}
-
-# Check if we have a default route AND internet connectivity
-if ! ip -4 route list 0/0 >/dev/null 2>&1 || ! check_internet; then
-    echo -n "offline"
+# Check if seconionis-mate is already running
+if pgrep -f "python3.*securonis-mate" > /dev/null; then
+    # If it's already running, just focus the window if possible
+    # This uses wmctrl if available to focus the window
+    if command -v wmctrl > /dev/null; then
+        wmctrl -a "Seconionis" 2>/dev/null
+    fi
+    
+    # Exit without starting a new instance
+    echo "seconionis-mate is already running"
     exit 0
-fi
-
-if [ ! -f "$BACKUPDIR/started" ]; then
-    echo -n "stopped"
-    exit 0
-fi
-
-TORSTATUS=$(systemctl is-active tor 2>/dev/null)
-
-if [ "$TORSTATUS" = "active" ]; then
-    echo -n "enabled"
 else
-    echo -n "disabled"
+    # If not running, start it
+    exec seconionis-mate
 fi
-
-exit 0
