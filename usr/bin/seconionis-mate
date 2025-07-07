@@ -1,51 +1,364 @@
-#!/bin/bash
-
-# anonboot - Generate a random hostname on each boot
-
-# Root check
-if [ "$EUID" -ne 0 ]; then
-    echo "Please run as root"
-    exit 1
-fi
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+import os
+#import sys
+import subprocess
+import gi
+import gettext
+import threading
+import webbrowser
 
 # Configuration
-PREFIX="host" # Prefix for the hostname
-CHARS="abcdefghijklmnopqrstuvwxyz" # Characters to use for random generation
-MIN_LENGTH=5 # Minimum length for random string
-MAX_LENGTH=10 # Maximum length for random string
+TOR_PORT = "9040"
 
-# Function to generate a random hostname
-generate_hostname() {
-    # Generate random string
-    LENGTH=$(( RANDOM % (MAX_LENGTH - MIN_LENGTH + 1) + MIN_LENGTH ))
-    RANDOM_STRING=""
-    
-    for i in $(seq 1 $LENGTH); do
-        POS=$(( RANDOM % ${#CHARS} ))
-        RANDOM_STRING="${RANDOM_STRING}${CHARS:$POS:1}"
-    done
-    
-    echo "${PREFIX}-${RANDOM_STRING}"
-}
+# Initialize gettext for translations
+gettext.bindtextdomain('seconionis', '/usr/share/locale')
+gettext.textdomain('seconionis')
+_ = gettext.gettext
 
-# Generate the new hostname
-NEW_HOSTNAME=$(generate_hostname)
-echo "$NEW_HOSTNAME" > /etc/hostname
+gi.require_version("Gtk", "3.0")
+gi.require_version('AyatanaAppIndicator3', '0.1')
+gi.require_version('Notify', '0.7')
+from gi.repository import GLib as glib, Gtk as gtk, Gdk as gdk
+from gi.repository import AyatanaAppIndicator3 as appindicator
+from gi.repository import Notify, GdkPixbuf
 
-# Update /etc/hosts file to include the new hostname
-cp /etc/hosts /etc/hosts.bak  # Backup original hosts file
-OLD_HOSTNAME=$(hostname)
+def main():
+  Notify.init("Seconionis")
+  indicator = appindicator.Indicator.new("customtray", '', appindicator.IndicatorCategory.APPLICATION_STATUS)
+  indicator.set_status(appindicator.IndicatorStatus.ACTIVE)
+  indicator.set_menu(menu(indicator))
+  status_update(indicator)
+  glib.timeout_add(1000, status_update, indicator)
+  gtk.main()
 
-# Update the hosts file - replace the old hostname with the new one
-sed -i "s/127.0.1.1.*$OLD_HOSTNAME/127.0.1.1\t$NEW_HOSTNAME/g" /etc/hosts
+def status_update(indicator):
 
-# If the hostname wasn't in hosts file, add it
-if ! grep -q "127.0.1.1.*$NEW_HOSTNAME" /etc/hosts; then
-    echo "127.0.1.1\t$NEW_HOSTNAME" >> /etc/hosts
-fi
+  status = subprocess.check_output("sudo  /usr/share/seconionis/seconionis-status", shell=True)
 
-# Set the hostname
-hostnamectl set-hostname "$NEW_HOSTNAME"
+  if status == b'offline':
+    indicator.set_icon(indicator.ICON_OFFLINE)
+    indicator.set_label(indicator.LABEL_OFFLINE, 'customtray')
+    indicator.menuitem_start.set_sensitive(False)
+    indicator.menuitem_stop.set_sensitive(False)
+    indicator.menuitem_reload.set_sensitive(False)
+  elif status == b'disabled':
+    indicator.set_icon(indicator.ICON_DISABLED)
+    indicator.set_label(indicator.LABEL_DISABLED, 'customtray')
+    indicator.menuitem_start.set_sensitive(True)
+    indicator.menuitem_stop.set_sensitive(False)
+    indicator.menuitem_reload.set_sensitive(False)
+  elif status == b'stopped':
+    indicator.set_icon(indicator.ICON_STOPPED)
+    indicator.set_label(indicator.LABEL_STOPPED, 'customtray')
+    indicator.menuitem_start.set_sensitive(True)
+    indicator.menuitem_stop.set_sensitive(False)
+    indicator.menuitem_reload.set_sensitive(False)
+  else:  # enabled
+    indicator.set_icon(indicator.ICON_ENABLED)
+    indicator.set_label(indicator.LABEL_ENABLED, 'customtray')
+    indicator.menuitem_start.set_sensitive(False)
+    indicator.menuitem_stop.set_sensitive(True)
+    indicator.menuitem_reload.set_sensitive(True)
 
-echo "Hostname set to: $NEW_HOSTNAME"
-exit 0
+  return True
+
+def menu(indicator):
+
+  indicator.APP_ICON       = os.environ['APP_ICON']       if 'APP_ICON'       in os.environ else '/usr/share/icons/hicolor/scalable/apps/seconionis.png'
+
+  indicator.ICON_OFFLINE   = os.environ['ICON_OFFLINE']   if 'ICON_OFFLINE'   in os.environ else '/usr/share/icons/hicolor/scalable/apps/seconionis-offline.png'
+  indicator.ICON_DISABLED  = os.environ['ICON_DISABLED']  if 'ICON_DISABLED'  in os.environ else '/usr/share/icons/hicolor/scalable/apps/seconionis-disabled.png'
+  indicator.ICON_STOPPED   = os.environ['ICON_STOPPED']   if 'ICON_STOPPED'   in os.environ else '/usr/share/icons/hicolor/scalable/apps/seconionis-stopped.png'
+  indicator.ICON_ENABLED   = os.environ['ICON_ENABLED']   if 'ICON_ENABLED'   in os.environ else '/usr/share/icons/hicolor/scalable/apps/seconionis-enabled.png'
+
+  indicator.LABEL_OFFLINE  = os.environ['LABEL_OFFLINE']  if 'LABEL_OFFLINE'  in os.environ else _('OFFLINE')
+  indicator.LABEL_DISABLED = os.environ['LABEL_DISABLED'] if 'LABEL_DISABLED' in os.environ else _('TOR ROUTING')
+  indicator.LABEL_STOPPED  = os.environ['LABEL_STOPPED']  if 'LABEL_STOPPED'  in os.environ else _('STOPPED')
+  indicator.LABEL_ENABLED  = os.environ['LABEL_ENABLED']  if 'LABEL_ENABLED'  in os.environ else _('TOR ROUTING')
+
+  indicator.MENU_START     = os.environ['MENU_START']     if 'MENU_START'     in os.environ else _('Start Tor Routing')
+  indicator.MENU_STOP      = os.environ['MENU_STOP']      if 'MENU_STOP'      in os.environ else _('Stop Tor Routing')
+  indicator.MENU_TORCHK    = os.environ['MENU_TORCHK']    if 'MENU_TORCHK'    in os.environ else _('Show IP Address')
+  indicator.MENU_RELOAD    = os.environ['MENU_RELOAD']    if 'MENU_RELOAD'    in os.environ else _('Switch IP Address')
+  indicator.MENU_STATUS    = os.environ['MENU_STATUS']    if 'MENU_STATUS'    in os.environ else _('Status')
+  indicator.MENU_RESTART   = os.environ['MENU_RESTART']   if 'MENU_RESTART'   in os.environ else _('Restart Router')
+  indicator.MENU_CHANGEMAC = os.environ['MENU_CHANGEMAC'] if 'MENU_CHANGEMAC' in os.environ else _('Change MAC Address')
+  indicator.MENU_REVERTMAC = os.environ['MENU_REVERTMAC'] if 'MENU_REVERTMAC' in os.environ else _('Revert MAC Address')
+  indicator.MENU_ABOUT     = os.environ['MENU_ABOUT']     if 'MENU_ABOUT'     in os.environ else _('About')
+  indicator.MENU_EXIT      = os.environ['MENU_EXIT']      if 'MENU_EXIT'      in os.environ else _('Exit')
+
+  menu = gtk.Menu()
+
+  menuitem_start = gtk.MenuItem(indicator.MENU_START)
+  menuitem_start.connect('activate', tor_router_start)
+  menu.append(menuitem_start)
+
+  menuitem_stop = gtk.MenuItem(indicator.MENU_STOP)
+  menuitem_stop.connect('activate', tor_router_stop)
+  menu.append(menuitem_stop)
+
+  menuitem_separator1 = gtk.SeparatorMenuItem()
+  menu.append(menuitem_separator1)
+
+  menuitem_torchk = gtk.MenuItem(indicator.MENU_TORCHK)
+  menuitem_torchk.connect('activate', tor_router_torchk)
+  menu.append(menuitem_torchk)
+
+  menuitem_reload = gtk.MenuItem(indicator.MENU_RELOAD)
+  menuitem_reload.connect('activate', tor_router_reload)
+  menu.append(menuitem_reload)
+
+  menuitem_status = gtk.MenuItem(indicator.MENU_STATUS)
+  menuitem_status.connect('activate', tor_router_status)
+  menu.append(menuitem_status)
+
+  menuitem_restart = gtk.MenuItem(indicator.MENU_RESTART)
+  menuitem_restart.connect('activate', tor_router_restart)
+  menu.append(menuitem_restart)
+
+  menuitem_changemac = gtk.MenuItem(indicator.MENU_CHANGEMAC)
+  menuitem_changemac.connect('activate', tor_router_changemac)
+  menu.append(menuitem_changemac)
+
+  menuitem_revertmac = gtk.MenuItem(indicator.MENU_REVERTMAC)
+  menuitem_revertmac.connect('activate', tor_router_revertmac)
+  menu.append(menuitem_revertmac)
+
+  menuitem_separator2 = gtk.SeparatorMenuItem()
+  menu.append(menuitem_separator2)
+
+  menuitem_about = gtk.MenuItem(indicator.MENU_ABOUT)
+  menuitem_about.connect('activate', dialog_about)
+  menu.append(menuitem_about)
+
+  menuitem_exit = gtk.MenuItem(indicator.MENU_EXIT)
+  menuitem_exit.connect('activate', quit)
+  menu.append(menuitem_exit)
+
+  indicator.menuitem_start  = menuitem_start
+  indicator.menuitem_stop   = menuitem_stop
+  indicator.menuitem_reload = menuitem_reload
+
+  menu.indicator = indicator
+  menu.show_all()
+  return menu
+
+def tor_router_start(menuitem):
+  process = subprocess.Popen(['sudo', '/usr/bin/seconionis', 'start'], stdout=subprocess.PIPE)
+  stdout = process.communicate()[0]
+
+  print(stdout.decode('utf-8'))
+
+  if process.returncode == 0:
+    notification = Notify.Notification.new(_('Seconionis started'), stdout.decode('utf-8'))
+  else:
+    notification = Notify.Notification.new(_('Seconionis failed to start'), stdout.decode('utf-8'))
+
+  image = GdkPixbuf.Pixbuf.new_from_file(menuitem.get_parent().indicator.ICON_ENABLED)
+
+  notification.set_hint('resident', glib.Variant.new_boolean(False))
+  notification.set_hint('transient', glib.Variant.new_boolean(True))
+  notification.set_icon_from_pixbuf(image)
+  notification.set_image_from_pixbuf(image)
+  notification.set_timeout(5000)
+  notification.show()
+
+def tor_router_stop(menuitem):
+  process = subprocess.Popen(['sudo', '/usr/bin/seconionis', 'stop'], stdout=subprocess.PIPE)
+  stdout = process.communicate()[0]
+
+  print(stdout.decode('utf-8'))
+
+  if process.returncode == 0:
+    notification = Notify.Notification.new(_('Seconionis stopped'), stdout.decode('utf-8'))
+  else:
+    notification = Notify.Notification.new(_('Seconionis failed to stop'), stdout.decode('utf-8'))
+
+  image = GdkPixbuf.Pixbuf.new_from_file(menuitem.get_parent().indicator.ICON_DISABLED)
+
+  notification.set_hint('resident', glib.Variant.new_boolean(False))
+  notification.set_hint('transient', glib.Variant.new_boolean(True))
+  notification.set_icon_from_pixbuf(image)
+  notification.set_image_from_pixbuf(image)
+  notification.set_timeout(5000)
+  notification.show()
+
+#def tor_router_torchk(menuitem):
+#  pid = os.fork()
+#  if not pid:
+#    webbrowser.get('/usr/bin/x-www-browser --incognito -private-window %s').open('https://check.torproject.org/', new=2)
+#    sys.exit()
+
+def tor_router_torchk(menuitem):
+  open_web_browser=lambda: webbrowser.get('/usr/bin/x-www-browser --incognito -private-window %s').open('https://check.torproject.org/', new=2)
+  web_browser_thread=threading.Thread(target=open_web_browser)
+  web_browser_thread.start()
+
+def tor_router_reload(menuitem):
+  process = subprocess.Popen(['sudo', '/usr/bin/seconionis', 'changeid'], stdout=subprocess.PIPE)
+  stdout = process.communicate()[0]
+
+  print(stdout.decode('utf-8'))
+
+  if process.returncode == 0:
+    notification = Notify.Notification.new(_('Seconionis IP address changed'), stdout.decode('utf-8'))
+  else:
+    notification = Notify.Notification.new(_('Seconionis failed to change IP address'), stdout.decode('utf-8'))
+
+  image = GdkPixbuf.Pixbuf.new_from_file(menuitem.get_parent().indicator.ICON_ENABLED)
+
+  notification.set_hint('resident', glib.Variant.new_boolean(False))
+  notification.set_hint('transient', glib.Variant.new_boolean(True))
+  notification.set_icon_from_pixbuf(image)
+  notification.set_image_from_pixbuf(image)
+  notification.set_timeout(5000)
+  notification.show()
+
+def tor_router_status(menuitem):
+    try:
+        # Check Tor service status
+        try:
+            tor_status = subprocess.check_output(['systemctl', 'is-active', 'tor'], stderr=subprocess.PIPE).decode().strip()
+        except subprocess.CalledProcessError:
+            tor_status = 'inactive'
+        
+        # Check Seconionis autostart service status
+        try:
+            autostart_status = subprocess.check_output(['systemctl', 'is-active', 'seconionis-autostart'], stderr=subprocess.PIPE).decode().strip()
+        except subprocess.CalledProcessError:
+            autostart_status = 'disabled'
+            
+        # Check if the service is enabled for autostart
+        try:
+            autostart_enabled = subprocess.check_output(['systemctl', 'is-enabled', 'seconionis-autostart'], stderr=subprocess.PIPE).decode().strip()
+            # If service is enabled, just show enabled regardless of active state
+            if autostart_enabled == 'enabled':
+                autostart_status = 'enabled'
+        
+        # Check if traffic is actually being routed through Tor by using curl through torsocks
+        try:
+            # Use curl with torsocks to check if we're using Tor
+            cmd = f"curl -s https://check.torproject.org"
+            result = subprocess.check_output(cmd, shell=True, timeout=5).decode('utf-8')
+            # If the page contains "Congratulations" it means we're using Tor
+            routing_active = "Congratulations" in result
+        except Exception as e:
+            print(f"Error checking Tor status: {e}")
+            routing_active = False
+
+        status_msg = f"Tor Service: {tor_status.upper()}\n"
+        status_msg += f"Seconionis Service: {autostart_status.upper()}\n"
+        status_msg += f"Traffic Routing: {'ACTIVE' if routing_active else 'INACTIVE'}"
+
+        if tor_status == 'active' and routing_active:
+            title = _('Seconionis is routing all traffic through Tor.')
+        else:
+            title = _('Seconionis is NOT routing all traffic through Tor.')
+
+        notification = Notify.Notification.new(title, status_msg)
+    except Exception as e:
+        notification = Notify.Notification.new(_('Status check failed'), str(e))
+
+    image = GdkPixbuf.Pixbuf.new_from_file(menuitem.get_parent().indicator.APP_ICON)
+    notification.set_hint('resident', glib.Variant.new_boolean(False))
+    notification.set_hint('transient', glib.Variant.new_boolean(True))
+    notification.set_icon_from_pixbuf(image)
+    notification.set_image_from_pixbuf(image)
+    notification.set_timeout(6000)  # Show for 6 seconds
+    notification.show()
+
+def tor_router_restart(menuitem):
+    process = subprocess.Popen(['sudo', '/usr/bin/seconionis', 'restart'], stdout=subprocess.PIPE)
+    stdout = process.communicate()[0]
+
+    print(stdout.decode('utf-8'))
+
+    if process.returncode == 0:
+        notification = Notify.Notification.new(_('Seconionis router restarted'), stdout.decode('utf-8'))
+    else:
+        notification = Notify.Notification.new(_('Failed to restart Seconionis router'), stdout.decode('utf-8'))
+
+    image = GdkPixbuf.Pixbuf.new_from_file(menuitem.get_parent().indicator.ICON_ENABLED)
+    notification.set_hint('resident', glib.Variant.new_boolean(False))
+    notification.set_hint('transient', glib.Variant.new_boolean(True))
+    notification.set_icon_from_pixbuf(image)
+    notification.set_image_from_pixbuf(image)
+    notification.set_timeout(5000)
+    notification.show()
+
+def tor_router_changemac(menuitem):
+  process = subprocess.Popen(['sudo', '/usr/bin/seconionis', 'changemac'], stdout=subprocess.PIPE)
+  stdout = process.communicate()[0]
+
+  print(stdout.decode('utf-8'))
+
+  if process.returncode == 0:
+    notification = Notify.Notification.new(_('MAC addresses changed'), stdout.decode('utf-8'))
+  else:
+    notification = Notify.Notification.new(_('Failed to change MAC addresses'), stdout.decode('utf-8'))
+
+  image = GdkPixbuf.Pixbuf.new_from_file(menuitem.get_parent().indicator.APP_ICON)
+
+  notification.set_hint('resident', glib.Variant.new_boolean(False))
+  notification.set_hint('transient', glib.Variant.new_boolean(True))
+  notification.set_icon_from_pixbuf(image)
+  notification.set_image_from_pixbuf(image)
+  notification.set_timeout(5000)
+  notification.show()
+
+def tor_router_revertmac(menuitem):
+  process = subprocess.Popen(['sudo', '/usr/bin/seconionis', 'revertmac'], stdout=subprocess.PIPE)
+  stdout = process.communicate()[0]
+
+  print(stdout.decode('utf-8'))
+
+  if process.returncode == 0:
+    notification = Notify.Notification.new(_('MAC addresses reverted'), stdout.decode('utf-8'))
+  else:
+    notification = Notify.Notification.new(_('Failed to revert MAC addresses'), stdout.decode('utf-8'))
+
+  image = GdkPixbuf.Pixbuf.new_from_file(menuitem.get_parent().indicator.APP_ICON)
+
+  notification.set_hint('resident', glib.Variant.new_boolean(False))
+  notification.set_hint('transient', glib.Variant.new_boolean(True))
+  notification.set_icon_from_pixbuf(image)
+  notification.set_image_from_pixbuf(image)
+  notification.set_timeout(5000)
+  notification.show()
+
+def dialog_about(menuitem):
+
+  menuitem.set_sensitive(False)
+
+  about_dialog = gtk.AboutDialog()
+
+  about_dialog.set_attached_to(menuitem)
+  about_dialog.set_transient_for(None)
+  about_dialog.set_auto_startup_notification(False)
+  about_dialog.set_keep_above(True)
+  about_dialog.set_modal(True)
+  about_dialog.set_skip_pager_hint(True)
+  about_dialog.set_skip_taskbar_hint(True)
+  about_dialog.connect("destroy", lambda w: (menuitem.set_sensitive(True), w.destroy()))
+
+  about_dialog.set_logo(GdkPixbuf.Pixbuf.new_from_file(menuitem.get_parent().indicator.APP_ICON).scale_simple(48, 48, GdkPixbuf.InterpType.BILINEAR))
+
+  about_dialog.set_program_name(_('Seconionis'))
+  about_dialog.set_version("1.0")
+  about_dialog.set_authors(["root0emir"])
+  about_dialog.set_license("GNU General Public License v3.0\n\nThis program is free software...")
+  about_dialog.set_website("https://securonis.github.io")
+  about_dialog.set_comments(_('This indicator allows you to manage TOR routing system-wide.'))
+
+# about_dialog.run()
+# about_dialog.destroy()
+
+  about_dialog.show_all()
+
+def quit(menuitem):
+  Notify.uninit()
+  gtk.main_quit()
+
+if __name__ == "__main__":
+  main()
